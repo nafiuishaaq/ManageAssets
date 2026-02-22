@@ -226,7 +226,7 @@ fn test_validate_transfer_empty_whitelist_allows_all() {
     });
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), true);
+    assert!(result.unwrap());
 }
 
 #[test]
