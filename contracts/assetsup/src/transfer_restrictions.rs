@@ -88,32 +88,40 @@ pub fn validate_transfer(
     env: &Env,
     asset_id: u64,
     _from: Address,
-    _to: Address,
+    to: Address,
 ) -> Result<bool, Error> {
     let store = env.storage().persistent();
 
+    // Check whitelist: if non-empty, `to` must be whitelisted
+    let whitelist_key = TokenDataKey::Whitelist(asset_id);
+    let whitelist: Vec<Address> = store
+        .get(&whitelist_key)
+        .flatten()
+        .unwrap_or_else(|| Vec::new(env));
+
+    if !whitelist.is_empty() {
+        let is_listed = whitelist.iter().any(|a| a == to);
+        if !is_listed {
+            return Err(Error::TransferRestrictionFailed);
+        }
+    }
+
     let restriction_key = TokenDataKey::TransferRestriction(asset_id);
 
-    // If no restrictions, allow transfer
+    // If no restrictions config, allow transfer
     let restriction: TransferRestriction = match store.get(&restriction_key) {
         Some(Some(r)) => r,
         _ => {
-            return Ok(true); // No restrictions
+            return Ok(true);
         }
     };
 
-    // Check if accredited investor is required
+    // If accredited investor required, check whitelist as MVP proxy
     if restriction.require_accredited {
-        // In production, would check external oracle or data
-        // For now, we assume this is checked at authorization level
-        // This is a placeholder that would integrate with identity/KYC service
-    }
-
-    // Check geographic restrictions
-    if !restriction.geographic_allowed.is_empty() {
-        // In production, would check sender and receiver locations
-        // For now, we assume this is checked at authorization level
-        // This is a placeholder that would integrate with location service
+        let is_listed = whitelist.iter().any(|a| a == to);
+        if !is_listed {
+            return Err(Error::AccreditedInvestorRequired);
+        }
     }
 
     Ok(true)
