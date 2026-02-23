@@ -17,6 +17,7 @@ pub(crate) mod tokenization;
 pub(crate) mod transfer_restrictions;
 pub(crate) mod types;
 pub(crate) mod voting;
+pub(crate) mod lease;
 
 #[cfg(test)]
 mod tests;
@@ -833,4 +834,64 @@ impl AssetUpContract {
     pub fn get_asset_insurance_policies(env: Env, asset_id: BytesN<32>) -> Vec<BytesN<32>> {
         insurance::get_asset_policies(env, asset_id)
     }
+
+    
+/// Create a new lease. Lessor authenticates; asset must not already be actively leased.
+pub fn create_lease(
+    env:      Env,
+    asset_id: BytesN<32>,
+    lease_id: BytesN<32>,
+    lessor:   Address,
+    lessee:   Address,
+    start:    u64,
+    end:      u64,
+    rent:     i128,
+    deposit:  i128,
+) -> Result<(), Error> {
+    lessor.require_auth();
+    lease::create_lease(&env, asset_id, lease_id, lessor, lessee, start, end, rent, deposit)
+}
+
+/// Return a leased asset. Callable by lessor or lessee.
+pub fn return_leased_asset(
+    env:      Env,
+    lease_id: BytesN<32>,
+    caller:   Address,
+) -> Result<(), Error> {
+    caller.require_auth();
+    lease::return_leased_asset(&env, lease_id, caller)
+}
+
+/// Cancel a lease before it starts. Lessor only.
+pub fn cancel_lease(
+    env:      Env,
+    lease_id: BytesN<32>,
+    caller:   Address,
+) -> Result<(), Error> {
+    caller.require_auth();
+    lease::cancel_lease(&env, lease_id, caller)
+}
+
+/// Expire a lease permissionlessly once end_timestamp has passed.
+pub fn expire_lease(env: Env, lease_id: BytesN<32>) -> Result<(), Error> {
+    lease::expire_lease(&env, lease_id)
+}
+
+/// Fetch a lease by ID.
+pub fn get_lease(env: Env, lease_id: BytesN<32>) -> Result<lease::Lease, Error> {
+    lease::get_lease(&env, lease_id)
+}
+
+/// Return the active lease for an asset, or None.
+pub fn get_asset_active_lease(
+    env:      Env,
+    asset_id: BytesN<32>,
+) -> Option<lease::Lease> {
+    lease::get_asset_active_lease(&env, asset_id)
+}
+
+/// Return all lease IDs for a given lessee.
+pub fn get_lessee_leases(env: Env, lessee: Address) -> Vec<BytesN<32>> {
+    lease::get_lessee_leases(&env, lessee)
+}
 }
