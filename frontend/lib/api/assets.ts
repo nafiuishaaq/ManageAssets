@@ -5,6 +5,7 @@ import {
   AssetHistoryEvent,
   AssetHistoryFilters,
   AssetNote,
+  AssetStatus,
   AssetUser,
   Category,
   CategoryWithCount,
@@ -18,6 +19,38 @@ import {
 } from '@/lib/query/types/asset';
 
 export const assetApiClient = {
+  getAssets(params?: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    status?: AssetStatus;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{
+    assets: Asset[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
+    const searchParams = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          searchParams.append(key, String(value));
+        }
+      });
+    }
+    const qs = searchParams.toString();
+    return apiClient.request<{
+      assets: Asset[];
+      total: number;
+      page: number;
+      limit: number;
+      totalPages: number;
+    }>(`/assets${qs ? `?${qs}` : ''}`);
+  },
+
   getAsset(id: string): Promise<Asset> {
     return apiClient.request<Asset>(`/assets/${id}`);
   },
