@@ -52,6 +52,14 @@ pub enum Error {
     InvalidPurchaseValue = 37,
     InvalidMetadataUri = 38,
     InvalidOwnerAddress = 39,
+
+    LeaseNotFound = 40,
+    LeaseAlreadyExists = 41,
+    AssetAlreadyLeased = 42,
+    InvalidLeaseStatus = 43,
+    LeaseAlreadyStarted = 44,
+    LeaseNotExpired = 45,
+    InvalidTimestamps = 46,
 }
 
 pub fn handle_error(env: &Env, error: Error) -> ! {
