@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 const PROTECTED = [ '/assets', '/departments', '/users'];
-const AUTH_PAGES = ['/signin', '/signup'];
+const AUTH_PAGES = ['/login', '/signup', '/register'];
 
 export const middleware = (req: NextRequest) => {
   const token = req.cookies.get('auth-token')?.value;
@@ -11,7 +11,7 @@ export const middleware = (req: NextRequest) => {
   const isAuthPage = AUTH_PAGES.includes(pathname);
 
   if (isProtected && !token) {
-    const url = new URL('/signin', req.url);
+    const url = new URL('/login', req.url);
     url.searchParams.set('redirect', pathname);
     return NextResponse.redirect(url);
   }
