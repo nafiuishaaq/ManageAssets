@@ -1,5 +1,5 @@
 use crate::asset::Asset;
-use crate::insurance::{ClaimStatus, InsuranceClaim, InsurancePolicy, PolicyStatus, PolicyType};
+use crate::insurance::{ClaimStatus, ClaimType, InsuranceClaim, InsurancePolicy, PolicyStatus, PolicyType};
 use crate::types::{AssetStatus, AssetType, CustomAttribute, TokenMetadata};
 use crate::{AssetUpContract, AssetUpContractClient};
 use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Vec};
@@ -146,6 +146,7 @@ pub fn create_test_claim(
         policy_id,
         asset_id,
         claimant: claimant.clone(),
+        claim_type: ClaimType::Damage,
         amount: 5000,
         status: ClaimStatus::Submitted,
         filed_at: current_time,
