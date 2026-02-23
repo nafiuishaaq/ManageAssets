@@ -67,6 +67,7 @@ pub struct InsuranceClaim {
     pub policy_id: BytesN<32>,
     pub asset_id: BytesN<32>,
     pub claimant: Address,
+    pub claim_type: ClaimType,
     pub amount: i128,
     pub status: ClaimStatus,
     pub filed_at: u64,
@@ -79,6 +80,7 @@ pub enum DataKey {
     Policy(BytesN<32>),
     Claim(BytesN<32>),
     AssetPolicies(BytesN<32>),
+    AssetClaims(BytesN<32>),
 }
 
 /// Create a new insurance policy with date validation and asset indexing
@@ -256,67 +258,233 @@ pub fn get_asset_policies(env: Env, asset_id: BytesN<32>) -> Vec<BytesN<32>> {
         .unwrap_or_else(|| Vec::new(&env))
 }
 
-pub fn file_claim(env: Env, claim: InsuranceClaim) -> Result<(), Error> {
+/// File a new insurance claim against an active policy
+pub fn file_insurance_claim(env: Env, claim: InsuranceClaim) -> Result<(), Error> {
+    // Claimant must authenticate
     claim.claimant.require_auth();
 
     let store = env.storage().persistent();
     let policy_key = DataKey::Policy(claim.policy_id.clone());
 
+    // Verify policy exists and is Active
     let policy: InsurancePolicy = store.get(&policy_key).ok_or(Error::AssetNotFound)?;
-
     if policy.status != PolicyStatus::Active {
         return Err(Error::Unauthorized);
     }
 
-    let key = DataKey::Claim(claim.claim_id.clone());
-    if store.has(&key) {
+    // Verify claim amount is positive
+    if claim.amount <= 0 {
+        return Err(Error::InvalidPayment);
+    }
+
+    // Verify claim doesn't already exist
+    let claim_key = DataKey::Claim(claim.claim_id.clone());
+    if store.has(&claim_key) {
         return Err(Error::AssetAlreadyExists);
     }
 
-    store.set(&key, &claim);
+    // Verify claim status is Submitted
+    if claim.status != ClaimStatus::Submitted {
+        return Err(Error::Unauthorized);
+    }
+
+    // Store the claim
+    store.set(&claim_key, &claim);
+
+    // Index claim by asset_id
+    let mut asset_claims: Vec<BytesN<32>> = store
+        .get(&DataKey::AssetClaims(claim.asset_id.clone()))
+        .unwrap_or_else(|| Vec::new(&env));
+    asset_claims.push_back(claim.claim_id.clone());
+    store.set(&DataKey::AssetClaims(claim.asset_id.clone()), &asset_claims);
 
     log!(&env, "ClaimFiled: {:?}", claim.claim_id);
     Ok(())
 }
 
-pub fn approve_claim(env: Env, claim_id: BytesN<32>, approver: Address) -> Result<(), Error> {
-    approver.require_auth();
+/// Move a claim from Submitted to UnderReview status
+pub fn mark_insurance_claim_under_review(
+    env: Env,
+    claim_id: BytesN<32>,
+    insurer: Address,
+) -> Result<(), Error> {
+    insurer.require_auth();
 
     let store = env.storage().persistent();
-    let key = DataKey::Claim(claim_id.clone());
+    let claim_key = DataKey::Claim(claim_id.clone());
 
-    let mut claim: InsuranceClaim = store.get(&key).ok_or(Error::AssetNotFound)?;
+    let mut claim: InsuranceClaim = store.get(&claim_key).ok_or(Error::AssetNotFound)?;
+
+    // Verify insurer is authorized
+    let policy: InsurancePolicy = store
+        .get(&DataKey::Policy(claim.policy_id.clone()))
+        .ok_or(Error::AssetNotFound)?;
+    if insurer != policy.insurer {
+        return Err(Error::Unauthorized);
+    }
+
+    // Validate status transition: only Submitted claims can move to UnderReview
+    if claim.status != ClaimStatus::Submitted {
+        return Err(Error::Unauthorized);
+    }
+
+    claim.status = ClaimStatus::UnderReview;
+    store.set(&claim_key, &claim);
+
+    log!(&env, "ClaimUnderReview: {:?}", claim_id);
+    Ok(())
+}
+
+/// Approve a claim and set the approved amount
+pub fn approve_insurance_claim(
+    env: Env,
+    claim_id: BytesN<32>,
+    insurer: Address,
+    approved_amount: i128,
+) -> Result<(), Error> {
+    insurer.require_auth();
+
+    let store = env.storage().persistent();
+    let claim_key = DataKey::Claim(claim_id.clone());
+
+    let mut claim: InsuranceClaim = store.get(&claim_key).ok_or(Error::AssetNotFound)?;
+
+    // Verify insurer is authorized
+    let policy: InsurancePolicy = store
+        .get(&DataKey::Policy(claim.policy_id.clone()))
+        .ok_or(Error::AssetNotFound)?;
+    if insurer != policy.insurer {
+        return Err(Error::Unauthorized);
+    }
+
+    // Validate status transition: only UnderReview claims can be approved
+    if claim.status != ClaimStatus::UnderReview {
+        return Err(Error::Unauthorized);
+    }
+
+    // Validate approved amount
+    if approved_amount <= 0 {
+        return Err(Error::InvalidPayment);
+    }
+
+    // Approved amount cannot exceed coverage amount
+    if approved_amount > policy.coverage_amount {
+        return Err(Error::InvalidPayment);
+    }
 
     claim.status = ClaimStatus::Approved;
-    claim.approved_amount = claim.amount;
-
-    store.set(&key, &claim);
+    claim.approved_amount = approved_amount;
+    store.set(&claim_key, &claim);
 
     log!(&env, "ClaimApproved: {:?}", claim_id);
     Ok(())
 }
 
-pub fn pay_claim(env: Env, claim_id: BytesN<32>) -> Result<(), Error> {
+/// Reject a claim (only Submitted or UnderReview claims can be rejected)
+pub fn reject_insurance_claim(
+    env: Env,
+    claim_id: BytesN<32>,
+    insurer: Address,
+) -> Result<(), Error> {
+    insurer.require_auth();
+
     let store = env.storage().persistent();
-    let key = DataKey::Claim(claim_id.clone());
+    let claim_key = DataKey::Claim(claim_id.clone());
 
-    let mut claim: InsuranceClaim = store.get(&key).ok_or(Error::AssetNotFound)?;
+    let mut claim: InsuranceClaim = store.get(&claim_key).ok_or(Error::AssetNotFound)?;
 
+    // Verify insurer is authorized
+    let policy: InsurancePolicy = store
+        .get(&DataKey::Policy(claim.policy_id.clone()))
+        .ok_or(Error::AssetNotFound)?;
+    if insurer != policy.insurer {
+        return Err(Error::Unauthorized);
+    }
+
+    // Validate status transition: only Submitted or UnderReview claims can be rejected
+    if claim.status != ClaimStatus::Submitted && claim.status != ClaimStatus::UnderReview {
+        return Err(Error::Unauthorized);
+    }
+
+    claim.status = ClaimStatus::Rejected;
+    store.set(&claim_key, &claim);
+
+    log!(&env, "ClaimRejected: {:?}", claim_id);
+    Ok(())
+}
+
+/// Allow claimant to dispute a rejected claim
+pub fn dispute_insurance_claim(
+    env: Env,
+    claim_id: BytesN<32>,
+    claimant: Address,
+) -> Result<(), Error> {
+    claimant.require_auth();
+
+    let store = env.storage().persistent();
+    let claim_key = DataKey::Claim(claim_id.clone());
+
+    let mut claim: InsuranceClaim = store.get(&claim_key).ok_or(Error::AssetNotFound)?;
+
+    // Verify claimant is authorized
+    if claimant != claim.claimant {
+        return Err(Error::Unauthorized);
+    }
+
+    // Validate status transition: only Rejected claims can be disputed
+    if claim.status != ClaimStatus::Rejected {
+        return Err(Error::Unauthorized);
+    }
+
+    claim.status = ClaimStatus::Disputed;
+    store.set(&claim_key, &claim);
+
+    log!(&env, "ClaimDisputed: {:?}", claim_id);
+    Ok(())
+}
+
+/// Mark an approved claim as paid
+pub fn pay_insurance_claim(env: Env, claim_id: BytesN<32>, insurer: Address) -> Result<(), Error> {
+    insurer.require_auth();
+
+    let store = env.storage().persistent();
+    let claim_key = DataKey::Claim(claim_id.clone());
+
+    let mut claim: InsuranceClaim = store.get(&claim_key).ok_or(Error::AssetNotFound)?;
+
+    // Verify insurer is authorized
+    let policy: InsurancePolicy = store
+        .get(&DataKey::Policy(claim.policy_id.clone()))
+        .ok_or(Error::AssetNotFound)?;
+    if insurer != policy.insurer {
+        return Err(Error::Unauthorized);
+    }
+
+    // Validate status transition: only Approved claims can be paid
     if claim.status != ClaimStatus::Approved {
         return Err(Error::Unauthorized);
     }
 
     claim.status = ClaimStatus::Paid;
-    store.set(&key, &claim);
+    store.set(&claim_key, &claim);
 
     log!(&env, "ClaimPaid: {:?}", claim_id);
     Ok(())
 }
 
-pub fn get_policy(env: Env, policy_id: BytesN<32>) -> Option<InsurancePolicy> {
-    env.storage().persistent().get(&DataKey::Policy(policy_id))
+/// Get a specific insurance claim by ID
+pub fn get_insurance_claim(env: Env, claim_id: BytesN<32>) -> Option<InsuranceClaim> {
+    env.storage().persistent().get(&DataKey::Claim(claim_id))
 }
 
-pub fn get_claim(env: Env, claim_id: BytesN<32>) -> Option<InsuranceClaim> {
-    env.storage().persistent().get(&DataKey::Claim(claim_id))
+/// Get all claims for a specific asset
+pub fn get_asset_insurance_claims(env: Env, asset_id: BytesN<32>) -> Vec<BytesN<32>> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AssetClaims(asset_id))
+        .unwrap_or_else(|| Vec::new(&env))
+}
+
+pub fn get_policy(env: Env, policy_id: BytesN<32>) -> Option<InsurancePolicy> {
+    env.storage().persistent().get(&DataKey::Policy(policy_id))
 }
